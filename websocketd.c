@@ -249,7 +249,8 @@ static ws_stream_t ws_streams[] = {
 };
 static enqueue_realtime_command_ptr enqueue_realtime_command = protocol_enqueue_realtime_command;
 #if ESP_PLATFORM
-static portMUX_TYPE rx_mux = portMUX_INITIALIZER_UNLOCKED;
+//static portMUX_TYPE rx_mux = portMUX_INITIALIZER_UNLOCKED;
+SemaphoreHandle_t rx_mutex = NULL;
 #endif
 
 websocket_events_t websocket;
@@ -261,13 +262,19 @@ websocket_events_t websocket;
 static int16_t streamGetC (void)
 {
     int16_t data;
+    if (xSemaphoreTake(rx_mutex, portMAX_DELAY ) == pdTRUE) {
+        if(streambuffers.rxbuf.tail == streambuffers.rxbuf.head)
+            {
+            xSemaphoreGive(rx_mutex);
+            return SERIAL_NO_DATA; // no data available else EOF
+            }
 
-    if(streambuffers.rxbuf.tail == streambuffers.rxbuf.head)
-        return SERIAL_NO_DATA; // no data available else EOF
-
-    data = streambuffers.rxbuf.data[streambuffers.rxbuf.tail];                          // Get next character
-    streambuffers.rxbuf.tail = BUFNEXT(streambuffers.rxbuf.tail, streambuffers.rxbuf);  // and update pointer
-
+        data = streambuffers.rxbuf.data[streambuffers.rxbuf.tail];                          // Get next character
+        streambuffers.rxbuf.tail = BUFNEXT(streambuffers.rxbuf.tail, streambuffers.rxbuf);  // and update pointer
+        xSemaphoreGive(rx_mutex);
+    } else {
+        debug_writeln("Failed to take mutex 2");
+    }
     return data;
 }
 
@@ -290,9 +297,14 @@ static void streamRxFlush (void)
 
 static void websocketd_RxCancel (void)
 {
-    streambuffers.rxbuf.data[streambuffers.rxbuf.head] = ASCII_CAN;
-    streambuffers.rxbuf.tail = streambuffers.rxbuf.head;
-    streambuffers.rxbuf.head = BUFNEXT(streambuffers.rxbuf.head, streambuffers.rxbuf);
+    if (xSemaphoreTake(rx_mutex, portMAX_DELAY ) == pdTRUE) {
+        streambuffers.rxbuf.data[streambuffers.rxbuf.head] = ASCII_CAN;
+        streambuffers.rxbuf.tail = streambuffers.rxbuf.head;
+        streambuffers.rxbuf.head = BUFNEXT(streambuffers.rxbuf.head, streambuffers.rxbuf);
+        xSemaphoreGive(rx_mutex);
+    } else {
+        debug_writeln("Failed to take mutex 3");
+    }
 }
 
 static bool streamSuspendInput (bool suspend)
@@ -307,7 +319,8 @@ bool websocketd_RxPutC (char c)
     // discard input if MPG has taken over...
     if((ok = streambuffers.session && streambuffers.session->state == WsState_Connected && hal.stream.type != StreamType_MPG)) {
 #if ESP_PLATFORM
-        taskENTER_CRITICAL(&rx_mux);
+        //taskENTER_CRITICAL(&rx_mux);
+        if (xSemaphoreTake(rx_mutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
 #else
         taskENTER_CRITICAL();
 #endif
@@ -319,7 +332,11 @@ bool websocketd_RxPutC (char c)
             streambuffers.rxbuf.head = next_head;                   // and update pointer
         }
 #if ESP_PLATFORM
-        taskEXIT_CRITICAL(&rx_mux);
+        //taskEXIT_CRITICAL(&rx_mux);
+        xSemaphoreGive(rx_mutex);
+        } else {
+            debug_writeln("Failed to take mutex 1");
+        }
 #else
         taskEXIT_CRITICAL();
 #endif
@@ -1408,6 +1425,13 @@ bool websocketd_init (uint16_t port)
 
     ws_server.port = port;
     ws_server.link_lost = false;
+   
+    rx_mutex = xSemaphoreCreateMutex();
+    if (rx_mutex == NULL) {
+        debug_writeln("Failed to create mutex");
+    } else {
+        debug_writeln("Created mutex");
+    }
 
     struct tcp_pcb *pcb = tcp_new();
 
