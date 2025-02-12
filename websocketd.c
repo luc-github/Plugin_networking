@@ -273,7 +273,9 @@ static int16_t streamGetC (void)
         streambuffers.rxbuf.tail = BUFNEXT(streambuffers.rxbuf.tail, streambuffers.rxbuf);  // and update pointer
         xSemaphoreGive(rx_mutex);
     } else {
+        #if defined (DEBUG)
         debug_writeln("Failed to take mutex 2");
+        #endif
     }
     return data;
 }
@@ -303,7 +305,9 @@ static void websocketd_RxCancel (void)
         streambuffers.rxbuf.head = BUFNEXT(streambuffers.rxbuf.head, streambuffers.rxbuf);
         xSemaphoreGive(rx_mutex);
     } else {
+        #if defined (DEBUG)
         debug_writeln("Failed to take mutex 3");
+        #endif  // DEBUG
     }
 }
 
@@ -335,7 +339,9 @@ bool websocketd_RxPutC (char c)
         //taskEXIT_CRITICAL(&rx_mux);
         xSemaphoreGive(rx_mutex);
         } else {
+            #if defined (DEBUG)
             debug_writeln("Failed to take mutex 1");
+            #endif // DEBUG
         }
 #else
         taskEXIT_CRITICAL();
@@ -1427,11 +1433,13 @@ bool websocketd_init (uint16_t port)
     ws_server.link_lost = false;
    
     rx_mutex = xSemaphoreCreateMutex();
+    #if defined (DEBUG)
     if (rx_mutex == NULL) {
         debug_writeln("Failed to create mutex");
     } else {
         debug_writeln("Created mutex");
     }
+    #endif // DEBUG
 
     struct tcp_pcb *pcb = tcp_new();
 
